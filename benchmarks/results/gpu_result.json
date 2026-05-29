@@ -1,0 +1,6 @@
+{
+    "device": "cuda",
+    "matrix_size": 5000,
+    "execution_time_sec": 0.402,
+    "gpu": "NVIDIA GeForce RTX 3050 Mobile"
+}
