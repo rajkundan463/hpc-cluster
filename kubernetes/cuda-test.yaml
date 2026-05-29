@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Pod
+
+metadata:
+name: cuda-test
+
+spec:
+
+restartPolicy: Never
+
+nodeSelector:
+accelerator: nvidia
+
+containers:
+
+* name: cuda-test
+
+  image: nvidia/cuda:12.2.0-base-ubuntu22.04
+
+  command:
+
+  * nvidia-smi
+
+  resources:
+  limits:
+  nvidia.com/gpu: 1

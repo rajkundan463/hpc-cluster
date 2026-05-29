@@ -1,0 +1,273 @@
+# Kubernetes + Containerd + HPC Base Setup
+# Author: Kundan HPC Cluster
+# Nodes:
+#   master   -> control plane
+#   worker1  -> GPU worker
+#   worker2  -> CPU worker
+#
+# This playbook installs:
+#   - Required packages
+#   - Containerd
+#   - Kubernetes components
+#   - Kernel settings
+#   - Proxy configuration
+#   - GPU utility tools
+#
+
+
+- name: Kubernetes Cluster Base Setup
+  hosts: all
+  become: yes
+
+  vars:
+
+    
+    # Proxy Configuration
+    
+
+    proxy_env:
+      http_proxy: "http://edcguest:edcguest@172.31.100.25:3128/"
+      https_proxy: "http://edcguest:edcguest@172.31.100.25:3128/"
+      no_proxy: "localhost,127.0.0.1,master,worker1,worker2,172.31.65.147,172.31.65.144,172.31.65.111,10.96.0.0/12,10.244.0.0/16"
+
+    kubernetes_version: "1.29"
+
+  tasks:
+
+      
+    # SYSTEM PREPARATION
+      
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+      environment: "{{ proxy_env }}"
+
+    - name: Install base packages
+      apt:
+        name:
+          - curl
+          - wget
+          - vim
+          - git
+          - net-tools
+          - apt-transport-https
+          - ca-certificates
+          - software-properties-common
+          - gnupg
+          - lsb-release
+          - pciutils
+        state: present
+      environment: "{{ proxy_env }}"
+
+      
+    # DISABLE SWAP
+      
+
+    - name: Disable swap immediately
+      command: swapoff -a
+
+    - name: Disable swap permanently
+      replace:
+        path: /etc/fstab
+        regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
+        replace: '# \1'
+
+      
+    # KERNEL MODULES
+      
+
+    - name: Configure kernel modules for Kubernetes
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+
+    - name: Load overlay module
+      modprobe:
+        name: overlay
+        state: present
+
+    - name: Load br_netfilter module
+      modprobe:
+        name: br_netfilter
+        state: present
+
+      
+    # SYSCTL CONFIGURATION
+      
+
+    - name: Configure Kubernetes sysctl settings
+      copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward = 1
+
+    - name: Apply sysctl settings
+      command: sysctl --system
+
+      
+    # INSTALL CONTAINERD
+      
+
+    - name: Create keyrings directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Download Docker GPG key
+      shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+      environment: "{{ proxy_env }}"
+
+    - name: Add Docker repository
+      copy:
+        dest: /etc/apt/sources.list.d/docker.list
+        content: |
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] \
+          https://download.docker.com/linux/ubuntu \
+          jammy stable
+
+    - name: Install containerd
+      apt:
+        name: containerd.io
+        state: present
+        update_cache: yes
+      environment: "{{ proxy_env }}"
+
+      
+    # CONTAINERD CONFIGURATION
+      
+
+    - name: Create containerd config directory
+      file:
+        path: /etc/containerd
+        state: directory
+
+    - name: Generate default containerd config
+      shell: |
+        containerd config default > /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+
+    - name: Enable SystemdCgroup
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+
+    - name: Configure sandbox image
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: 'sandbox_image = ".*"'
+        replace: 'sandbox_image = "registry.k8s.io/pause:3.9"'
+
+      
+    # CONTAINERD PROXY
+      
+
+    - name: Create containerd systemd directory
+      file:
+        path: /etc/systemd/system/containerd.service.d
+        state: directory
+
+    - name: Configure containerd proxy
+      copy:
+        dest: /etc/systemd/system/containerd.service.d/http-proxy.conf
+        content: |
+          [Service]
+          Environment="HTTP_PROXY=http://edcguest:edcguest@172.31.100.25:3128/"
+          Environment="HTTPS_PROXY=http://edcguest:edcguest@172.31.100.25:3128/"
+          Environment="NO_PROXY=localhost,127.0.0.1,master,worker1,worker2,172.31.65.147,172.31.65.144,172.31.65.111,10.96.0.0/12,10.244.0.0/16"
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and restart containerd
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
+
+      
+    # INSTALL KUBERNETES
+      
+
+    - name: Download Kubernetes GPG key
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key \
+        | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      environment: "{{ proxy_env }}"
+
+    - name: Add Kubernetes repository
+      copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: |
+          deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] \
+          https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /
+
+    - name: Install Kubernetes packages
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: yes
+      environment: "{{ proxy_env }}"
+
+    - name: Hold Kubernetes packages
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+      
+    # KUBELET SERVICE
+      
+
+    - name: Enable kubelet
+      systemd:
+        name: kubelet
+        enabled: yes
+
+      
+    # GPU NODE VALIDATION
+      
+
+    - name: Verify NVIDIA GPU on worker1
+      shell: lspci | grep -i nvidia
+      register: gpu_output
+      changed_when: false
+      when: inventory_hostname == "worker1"
+
+    - name: Display GPU information
+      debug:
+        var: gpu_output.stdout
+      when: inventory_hostname == "worker1"
+
+      
+    # FINAL STATUS
+      
+
+    - name: Show node hostname
+      command: hostname
+      register: hostname_output
+      changed_when: false
+
+    - name: Display hostname
+      debug:
+        var: hostname_output.stdout

@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: Job
+
+metadata:
+name: gpu-matmul
+
+spec:
+
+backoffLimit: 2
+
+template:
+
+metadata:
+  labels:
+    app: gpu-matmul
+
+spec:
+
+  restartPolicy: Never
+
+  # Schedule only on GPU node
+  nodeSelector:
+    accelerator: nvidia
+
+  containers:
+
+  - name: gpu-matmul
+
+    image: pytorch/pytorch:2.3.1-cuda12.1-cudnn8-runtime
+
+    command:
+    - python
+    - /app/matrix_mul.py
+    - --size
+    - "5000"
+
+    resources:
+
+      requests:
+        cpu: "2"
+        memory: "4Gi"
+
+      limits:
+        cpu: "8"
+        memory: "8Gi"
+
+        # Request one GPU
+        nvidia.com/gpu: 1
